@@ -66,7 +66,7 @@ cd Cadiz-Bus
 Make sure you have Python 3 installed, then install the MQTT client library:
 
 ```
-pip install paho-mqtt
+apt install python3-paho-mqtt
 
 ```
 
