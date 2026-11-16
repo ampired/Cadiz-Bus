@@ -56,8 +56,8 @@ An end-to-end telemetry and smart management system for the urban public transit
 ### 1. Clone the repository
 
 ```
-git clone https://github.com/your-username/cadiz-bus-iot.git
-cd cadiz-bus-iot
+git clone https://github.com/ampired/Cadiz-Bus
+cd Cadiz-Bus
 
 ```
 
