@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - Flota de Autobuses</title>
+    <link rel="icon" href="icon.png" type="image/png">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            font-family: 'Segoe UI', sans-serif;
+            background: #f0f2f5;
+            overflow: hidden;
+        }
+
+        #panel-izq {
+            width: 360px;
+            background: #fff;
+            height: 100vh;
+            padding: 20px;
+            box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            overflow-y: auto;
+            box-sizing: border-box;
+        }
+
+        #mapa {
+            flex-grow: 1;
+            height: 100vh;
+        }
+
+        #panel-der {
+            width: 350px;
+            background: #fff;
+            height: 100vh;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            overflow-y: auto;
+            box-sizing: border-box;
+            border-left: 4px solid #dc3545;
+        }
+
+        .filtro-box {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #f7fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #cbd5e0;
+            font-size: 14px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 20px;
+            color: #1a202c;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 10px;
+        }
+
+        .card {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            background: #fafafa;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .card:hover {
+            border-color: #a0aec0;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+
+        .linea-badge {
+            color: white;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            color: white;
+            font-weight: bold;
+            background: #48bb78;
+            float: right;
+        }
+
+        .badge.danger {
+            background: #e53e3e;
+        }
+
+        .data-row {
+            font-size: 13px;
+            color: #4a5568;
+            margin: 6px 0;
+        }
+
+        .bar-bg {
+            width: 100%;
+            background: #e2e8f0;
+            height: 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .bar-fill {
+            height: 100%;
+            background: #48bb78;
+            transition: width 0.3s;
+        }
+
+        .ai-alert {
+            border-left: 4px solid #e53e3e;
+            background: #fff5f5;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .ai-alert.traffic {
+            border-left-color: #dd6b20;
+            background: #fffaf0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="panel-izq">
+        <h2>Inventario Sensores</h2>
+        <div class="filtro-box">
+            <label style="font-size: 13px; font-weight: bold; color: #4a5568;">Filtrar por Línea:</label>
+            <select id="selector-linea">
+                <option value="TODAS">Mostrar Todas las Líneas</option>
+                <option value="L1">Línea 1 (Cortadura)</option>
+                <option value="L2">Línea 2 (Loreto)</option>
+                <option value="L3">Línea 3 (Puntales)</option>
+                <option value="L5">Línea 5 (Zona Franca)</option>
+                <option value="L7">Línea 7 (La Caleta)</option>
+            </select>
+        </div>
+        <div id="lista-buses"></div>
+    </div>
+
+    <div id="mapa"></div>
+
+    <div id="panel-der">
+        <h2 style="color: #c53030;">Alertas Predictivas por IA</h2>
+        <div id="contenedor-alertas">
+            <p id="no-alertas" style="font-size: 13px; color: #48bb78; text-align: center;">Sistemas operando con
+                normalidad.</p>
+        </div>
+    </div>
+
+    <script>
+        const map = L.map('mapa').setView([36.518, -6.281], 14);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { attribution: '© Esri' }).addTo(map);
+        const busIcon = L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448339.png', iconSize: [35, 35] });
+
+        const coloresLineas = { "L1": "#3182ce", "L2": "#e53e3e", "L3": "#38a169", "L5": "#d69e2e", "L7": "#805ad5" };
+        const buses = {};
+        const datosGlobales = {};
+
+        let filtroActual = "TODAS";
+        document.getElementById("selector-linea").addEventListener("change", (e) => {
+            filtroActual = e.target.value;
+            renderizarTodo();
+        });
+
+        const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+        client.on('connect', () => client.subscribe('reto_telefonica/cadiz/flota_global'));
+
+        function procesarAlertasIA() {
+            const contenedor = document.getElementById('contenedor-alertas');
+            contenedor.innerHTML = '<p id="no-alertas" style="font-size: 13px; color: #48bb78; text-align: center;">✅ Sistemas operando con normalidad.</p>';
+            let hayAlertas = false;
+
+            Object.values(datosGlobales).forEach(datos => {
+                if (filtroActual !== "TODAS" && datos.linea !== filtroActual) return; // Filtrar alertas
+
+                if (datos.ia_bat) {
+                    hayAlertas = true;
+                    contenedor.innerHTML += `<div class="ai-alert"><b>⚠️ Batería Crítica - ${datos.id}</b><br>Nivel actual: ${datos.bateria}%. Perderá conexión.</div>`;
+                }
+                if (datos.ia_ret) {
+                    hayAlertas = true;
+                    contenedor.innerHTML += `<div class="ai-alert traffic"><b>⏱️ Retraso - ${datos.id}</b><br>Motivo: ${datos.causa_ret}.</div>`;
+                }
+            });
+            document.getElementById('no-alertas').style.display = hayAlertas ? 'none' : 'block';
+        }
+
+        function renderizarTodo() {
+            const contenedorBuses = document.getElementById('lista-buses');
+            contenedorBuses.innerHTML = '';
+
+            const busesArray = Object.values(datosGlobales).sort((a, b) => a.id.localeCompare(b.id));
+
+            busesArray.forEach(datos => {
+                // Lógica de filtrado
+                const visible = (filtroActual === "TODAS" || datos.linea === filtroActual);
+
+                // Mostrar/Ocultar Marcador en el Mapa
+                if (buses[datos.id]) {
+                    if (visible && !map.hasLayer(buses[datos.id])) map.addLayer(buses[datos.id]);
+                    if (!visible && map.hasLayer(buses[datos.id])) map.removeLayer(buses[datos.id]);
+                }
+
+                // Generar Tarjeta si es visible
+                if (visible) {
+                    let colorBat = datos.bateria < 20 ? "#e53e3e" : (datos.bateria < 40 ? "#ed8936" : "#48bb78");
+                    const tarjeta = document.createElement('div');
+                    tarjeta.className = 'card';
+                    tarjeta.innerHTML = `
+                        <h3 style="margin:0 0 10px 0;"><span class="linea-badge" style="background:${coloresLineas[datos.linea]}">${datos.linea}</span> ${datos.id} <span class="badge ${datos.bateria < 20 ? 'danger' : ''}">${datos.sentido}</span></h3>
+                        <p class="data-row">📍 GPS: ${datos.lat}, ${datos.lng}</p>
+                        <p class="data-row">🔋 Batería: ${datos.bateria}%</p>
+                        <div class="bar-bg"><div class="bar-fill" style="width: ${datos.bateria}%; background-color: ${colorBat};"></div></div>
+                    `;
+
+                    // Al hacer clic, muestra el autobús en el mapa
+                    tarjeta.onclick = () => {
+                        map.flyTo([datos.lat, datos.lng], 16, { animate: true, duration: 1.5 });
+                        if (buses[datos.id]) buses[datos.id].openPopup();
+                    };
+
+                    contenedorBuses.appendChild(tarjeta);
+                }
+            });
+            procesarAlertasIA();
+        }
+
+        client.on('message', (topic, message) => {
+            const datos = JSON.parse(message.toString());
+            datosGlobales[datos.id] = datos;
+
+            if (!buses[datos.id]) {
+                buses[datos.id] = L.marker([datos.lat, datos.lng], { icon: busIcon });
+                buses[datos.id].bindPopup(`<b>${datos.id}</b><br>${datos.sentido}`);
+                if (filtroActual === "TODAS" || datos.linea === filtroActual) buses[datos.id].addTo(map);
+            } else {
+                buses[datos.id].setLatLng([datos.lat, datos.lng]);
+            }
+            renderizarTodo();
+        });
+    </script>
+</body>
+
+</html>

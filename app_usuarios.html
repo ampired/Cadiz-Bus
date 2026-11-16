@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cádiz Bus</title>
+    <link rel="icon" href="icon.png" type="image/png">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body,
+        html {
+            margin: 0;
+            height: 100%;
+            font-family: 'Segoe UI', sans-serif;
+            background: #f0f2f5;
+        }
+
+        #mapa {
+            height: 100vh;
+            width: 100vw;
+            z-index: 1;
+        }
+
+        #header-filtros {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            padding: 8px 15px;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            overflow-x: auto;
+            max-width: 90vw;
+        }
+
+        .btn-linea {
+            border: none;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            color: white;
+            font-size: 13px;
+            opacity: 0.5;
+            transition: 0.3s;
+        }
+
+        .btn-linea.active {
+            opacity: 1;
+            transform: scale(1.05);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-todas {
+            background: #4a5568;
+            opacity: 1;
+        }
+
+        #panel-info {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+            width: 90%;
+            max-width: 450px;
+            max-height: 45vh;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .panel-header {
+            background: #f7fafc;
+            padding: 15px 20px;
+            border-radius: 20px 20px 0 0;
+            border-bottom: 1px solid #edf2f7;
+            font-weight: bold;
+            color: #2d3748;
+            display: flex;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+        }
+
+        .bus-item {
+            border-bottom: 1px solid #edf2f7;
+            padding: 15px 20px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .bus-item:hover {
+            background-color: #f7fafc;
+        }
+
+        .bus-item:last-child {
+            border-bottom: none;
+        }
+
+        .linea-badge {
+            color: white;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            margin-right: 8px;
+        }
+
+        .user-alert {
+            background: #fffaf0;
+            color: #dd6b20;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-top: 8px;
+            border: 1px solid #feebc8;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #e53e3e;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.7);
+            }
+
+            70% {
+                box-shadow: 0 0 0 6px rgba(229, 62, 62, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(229, 62, 62, 0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="header-filtros">
+        <button class="btn-linea btn-todas active" onclick="filtrar('TODAS', this)">Todas</button>
+        <button class="btn-linea" style="background:#3182ce;" onclick="filtrar('L1', this)">L1</button>
+        <button class="btn-linea" style="background:#e53e3e;" onclick="filtrar('L2', this)">L2</button>
+        <button class="btn-linea" style="background:#38a169;" onclick="filtrar('L3', this)">L3</button>
+        <button class="btn-linea" style="background:#d69e2e;" onclick="filtrar('L5', this)">L5</button>
+        <button class="btn-linea" style="background:#805ad5;" onclick="filtrar('L7', this)">L7</button>
+    </div>
+
+    <div id="mapa"></div>
+
+    <div id="panel-info">
+        <div class="panel-header">
+            <span id="titulo-panel">Red de Autobuses</span>
+            <div
+                style="display: flex; align-items: center; gap: 5px; font-size: 12px; color: #e53e3e; font-weight: normal;">
+                <div class="live-dot"></div> Satélite Activo
+            </div>
+        </div>
+        <div id="contenedor-buses"></div>
+    </div>
+
+    <script>
+        const map = L.map('mapa', { zoomControl: false }).setView([36.518, -6.281], 14);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { attribution: '© Esri' }).addTo(map);
+
+        const busIcon = L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448339.png', iconSize: [40, 40], iconAnchor: [20, 40], popupAnchor: [0, -35] });
+        const coloresLineas = { "L1": "#3182ce", "L2": "#e53e3e", "L3": "#38a169", "L5": "#d69e2e", "L7": "#805ad5" };
+
+        const busesMarkers = {};
+        const busesData = {};
+        let filtroActual = 'TODAS';
+
+        function filtrar(linea, boton) {
+            filtroActual = linea;
+
+            document.querySelectorAll('.btn-linea').forEach(b => b.classList.remove('active', 'btn-todas'));
+            boton.classList.add('active');
+            if (linea === 'TODAS') boton.classList.add('btn-todas');
+
+            document.getElementById('titulo-panel').innerText = linea === 'TODAS' ? 'Red de Autobuses' : `Autobuses ${linea}`;
+            renderizarPanel();
+        }
+
+        const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+        client.on('connect', () => client.subscribe('reto_telefonica/cadiz/flota_global'));
+
+        function renderizarPanel() {
+            const contenedor = document.getElementById('contenedor-buses');
+            contenedor.innerHTML = '';
+
+            const busesArray = Object.values(busesData).sort((a, b) => a.id.localeCompare(b.id));
+
+            busesArray.forEach(bus => {
+                const visible = (filtroActual === 'TODAS' || bus.linea === filtroActual);
+
+                // Ocultar o mostrar del mapa
+                if (busesMarkers[bus.id]) {
+                    if (visible && !map.hasLayer(busesMarkers[bus.id])) map.addLayer(busesMarkers[bus.id]);
+                    if (!visible && map.hasLayer(busesMarkers[bus.id])) map.removeLayer(busesMarkers[bus.id]);
+                }
+
+                if (visible) {
+                    const colorBase = coloresLineas[bus.linea];
+                    let alertaHTML = bus.ia_ret ? `<div class="user-alert">⚠️ <strong>Aviso:</strong> Demoras por ${bus.causa_ret.toLowerCase()}.</div>` : '';
+
+                    const busDiv = document.createElement('div');
+                    busDiv.className = 'bus-item';
+                    busDiv.innerHTML = `
+                        <h3 style="margin:0 0 5px 0;"><span class="linea-badge" style="background:${colorBase};">${bus.linea}</span> ${bus.id}</h3>
+                        <p style="margin:0; font-size:14px; color:#718096;">➡️ Dirección: <strong>${bus.sentido}</strong></p>
+                        ${alertaHTML}
+                    `;
+
+                    busDiv.onclick = () => {
+                        map.flyTo([bus.lat, bus.lng], 16, { animate: true, duration: 1 });
+                        if (busesMarkers[bus.id]) busesMarkers[bus.id].openPopup();
+                    };
+
+                    contenedor.appendChild(busDiv);
+                }
+            });
+        }
+
+        client.on('message', (topic, message) => {
+            const datos = JSON.parse(message.toString());
+            busesData[datos.id] = datos;
+
+            if (!busesMarkers[datos.id]) {
+                busesMarkers[datos.id] = L.marker([datos.lat, datos.lng], { icon: busIcon });
+                const colorBase = coloresLineas[datos.linea];
+                busesMarkers[datos.id].bindPopup(`<b><span style="background:${colorBase};color:white;padding:2px 5px;border-radius:4px;">${datos.linea}</span> Hacia ${datos.sentido.replace('Hacia ', '')}</b>`);
+                if (filtroActual === 'TODAS' || datos.linea === filtroActual) busesMarkers[datos.id].addTo(map);
+            } else {
+                busesMarkers[datos.id].setLatLng([datos.lat, datos.lng]);
+            }
+            renderizarPanel();
+        });
+    </script>
+</body>
+
+</html>
